@@ -90,24 +90,21 @@
         }
         
         // --- EVENT LISTENERS FOR ALL DEVICES ---
-        // 1. Keyboard for Desktop
         window.addEventListener('keydown', (e) => { if (e.key === 'ArrowUp' && targeti + 1 < names.length) { targeti++; } else if (e.key === 'ArrowDown' && targeti > 0) { targeti--; } });
         
-        // 2. Mouse Wheel for Desktop
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
-            if (e.deltaY > 0 && targeti + 1 < names.length) { targeti++; } 
-            else if (e.deltaY < 0 && targeti > 0) { targeti--; }
+            if (e.deltaY < 0 && targeti + 1 < names.length) { targeti++; } 
+            else if (e.deltaY > 0 && targeti > 0) { targeti--; }
         });
 
-        // 3. Touch Swipe for Mobile
         let touchStartY = 0;
-        const swipeThreshold = canvas.height / 40; // User must swipe this distance to change note
+        const swipeThreshold = canvas.height / 40;
         
         canvas.addEventListener('touchstart', (e) => {
             e.preventDefault();
             touchStartY = e.touches[0].clientY;
-            playTone(freqs[targeti]); // Play tone on initial tap
+            playTone(freqs[targeti]);
         }, { passive: false });
 
         canvas.addEventListener('touchmove', (e) => {
@@ -115,16 +112,16 @@
             const touchY = e.touches[0].clientY;
             const deltaY = touchY - touchStartY;
 
+            // **** CRITICAL CHANGE: SWIPE LOGIC IS INVERTED ****
             if (deltaY > swipeThreshold) { // Swiped down
-                if (targeti + 1 < names.length) targeti++;
-                touchStartY = touchY; // Reset start position for the next swipe
+                if (targeti > 0) targeti--; // DECREASE index (move to a lower note)
+                touchStartY = touchY; 
             } else if (deltaY < -swipeThreshold) { // Swiped up
-                if (targeti > 0) targeti--;
-                touchStartY = touchY; // Reset start position
+                if (targeti + 1 < names.length) targeti++; // INCREASE index (move to a higher note)
+                touchStartY = touchY;
             }
         }, { passive: false });
 
-        // 4. Mouse Click for Desktop (still useful)
         canvas.addEventListener('mousedown', () => playTone(freqs[targeti]));
         
         draw();
