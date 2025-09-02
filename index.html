@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pitch Trainer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <style>
+        html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #333; }
+        canvas { display: block; background-color: black; touch-action: none; /* Prevents browser from handling touch events like scrolling */ }
+    </style>
+</head>
+<body>
+    <canvas id="pitchCanvas"></canvas>
+    <script>
+        // =======================================================================
+        // YIN ALGORITHM (Unchanged)
+        // =======================================================================
+        function yin(signal, options) {
+            const threshold = options?.threshold ?? 0.1; const sampleRate = options?.sampleRate ?? 44100; const probabilityThreshold = options?.probabilityThreshold ?? 0.1; const bufferSize = signal.length; const yinBuffer = new Float32Array(bufferSize / 2); let probability = 0.0, tau;
+            for (let t = 1; t < bufferSize / 2; t++) for (let i = 0; i < bufferSize / 2; i++) { const delta = signal[i] - signal[i + t]; yinBuffer[t] += delta * delta; }
+            let runningSum = 0; yinBuffer[0] = 1; runningSum += yinBuffer[1]; yinBuffer[1] = yinBuffer[1] * 1 / runningSum;
+            for (let t = 2; t < bufferSize / 2; t++) { runningSum += yinBuffer[t]; yinBuffer[t] = yinBuffer[t] * t / runningSum; }
+            for (tau = 2; tau < bufferSize / 2; tau++) if (yinBuffer[tau] < threshold) { while (tau + 1 < bufferSize / 2 && yinBuffer[tau + 1] < yinBuffer[tau]) tau++; break; }
+            if (tau === bufferSize / 2 || yinBuffer[tau] >= threshold) return { pitch: null, probability: 0 };
+            probability = 1 - yinBuffer[tau]; if (probability < probabilityThreshold) return { pitch: null, probability: 0 };
+            let betterTau; const x0 = (tau < 1) ? tau : tau - 1; const x2 = (tau + 1 < bufferSize / 2) ? tau + 1 : tau;
+            if (x0 === tau) betterTau = (yinBuffer[tau] <= yinBuffer[x2]) ? tau : x2; else if (x2 === tau) betterTau = (yinBuffer[tau] <= yinBuffer[x0]) ? tau : x0;
+            else { const s0 = yinBuffer[x0]; const s1 = yinBuffer[tau]; const s2 = yinBuffer[x2]; betterTau = tau + (s2 - s0) / (2 * (2 * s1 - s2 - s0)); }
+            return { pitch: sampleRate / betterTau, probability: probability };
+        }
+
+        // =======================================================================
+        // VISUALIZER APPLICATION LOGIC
+        // =======================================================================
+        const canvas = document.getElementById('pitchCanvas'); const ctx = canvas.getContext('2d'); const LOCAL_STORAGE_KEY = 'pitch_scores';
+        canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+        let audioContext = null;
+
+        const noteNames = 'C C# D D# E F F# G G# A A# B'.split(' '); const names = [].concat(...['2', '3', '4'].map(octave => noteNames.map(note => note + octave)));
+        const freqs = names.map((_, i) => 2**((i - 9) / 12) * 110); const minFreq = freqs[0]; const maxFreq = freqs[freqs.length - 1]; const logFreqRange = Math.log(maxFreq / minFreq);
+        let targeti = names.indexOf('C3'); const HISTORY_SIZE = 60; let history = new Array(HISTORY_SIZE).fill(null);
+        let best = new Array(names.length).fill(999); let thisBest = new Array(names.length).fill(999);
+        try { const storedBest = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY)); if (storedBest && storedBest.length === names.length) { best = storedBest; } } catch (e) { console.error("Could not load best scores:", e); }
+        function saveBestScores() { localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(best)); }
+        function freqToY(f) { const topPadding = 30; const bottomPadding = 30; const drawingHeight = canvas.height - topPadding - bottomPadding; if (f > maxFreq) return topPadding; if (f < minFreq) return canvas.height - bottomPadding; return drawingHeight * (Math.log(maxFreq / f) / logFreqRange) + topPadding; }
+        function getRMS(data) { let sum = 0; for (let i = 0; i < data.length; i++) { sum += data[i] * data[i]; } return Math.sqrt(sum / data.length); }
+        
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.fillStyle = 'black'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            const noteNameX = canvas.width * 0.27; const lineStartX = canvas.width * 0.30; const lineEndX = canvas.width * 0.40; const thisBestX = canvas.width * 0.70; const bestX = canvas.width * 0.90;
+            ctx.fillStyle = '#FF7F00'; const historyTrailEndX = canvas.width * 0.98;
+            for (let i = 0; i < history.length; i++) { const pitch = history[i]; if (pitch) { const x = lineEndX + (history.length - 1 - i) * ((historyTrailEndX - lineEndX) / history.length); const y = freqToY(pitch); ctx.beginPath(); ctx.arc(x, y, 2, 0, 2 * Math.PI); ctx.fill(); } }
+            const currentPitch = history[history.length - 1]; if (currentPitch) { const cursorY = freqToY(currentPitch); ctx.strokeStyle = 'red'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(lineStartX, cursorY); ctx.lineTo(lineEndX, cursorY); ctx.stroke(); }
+            ctx.strokeStyle = 'white'; ctx.fillStyle = 'white'; ctx.textAlign = 'right';
+            for (let i = 0; i < names.length; i++) { const y = freqToY(freqs[i]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(lineStartX, y); ctx.lineTo(lineEndX, y); ctx.stroke(); ctx.font = (canvas.height / 45) + 'px sans-serif'; ctx.fillText(names[i], noteNameX, y + (canvas.height / 100)); const bestScore = best[i] === 999 ? '---' : best[i].toFixed(1); const thisBestScore = thisBest[i] === 999 ? '---' : thisBest[i].toFixed(1); ctx.fillText(bestScore, bestX, y + (canvas.height / 100)); ctx.fillText(thisBestScore, thisBestX, y + (canvas.height / 100)); }
+            const targetY = freqToY(freqs[targeti]); ctx.fillStyle = '#00FF00'; const arrowTipX = lineEndX + (canvas.width * 0.015); const arrowWidth = canvas.width * 0.02; const arrowHalfHeight = canvas.height / 90;
+            ctx.beginPath(); ctx.moveTo(arrowTipX, targetY); ctx.lineTo(arrowTipX + arrowWidth, targetY - arrowHalfHeight); ctx.lineTo(arrowTipX + arrowWidth, targetY + arrowHalfHeight); ctx.closePath(); ctx.fill();
+            const targetFreq = freqs[targeti]; let rmse = 0; let count = 0;
+            for (const f of history) { if (!f) continue; const miss = (Math.log2(f / targetFreq) * 12) ** 2; if (miss > 2) continue; rmse += miss; count++; }
+            const coverage = count / history.length;
+            const barX = canvas.width * 0.03; const barY = canvas.height * 0.1; const barWidth = canvas.width * 0.03; const barHeight = canvas.height * 0.8;
+            ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barWidth, barHeight); const filledHeight = barHeight * coverage; ctx.fillStyle = '#00FF00';
+            ctx.fillRect(barX, barY + barHeight - filledHeight, barWidth, filledHeight);
+            if (coverage > 0.9) { const score = Math.sqrt(rmse / count) * 100; thisBest[targeti] = Math.min(thisBest[targeti], score); if (score < best[targeti]) { best[targeti] = score; saveBestScores(); } ctx.fillStyle = 'white'; ctx.font = (canvas.height / 25) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(`RMSE: ${score.toFixed(1)}`, canvas.width / 2, canvas.height * 0.07); }
+        }
+        
+        function playTone(freq) {
+            if (!audioContext) return;
+            const now = audioContext.currentTime; const duration = 1.0; const harmonicFreqs = [freq * 1, freq * 2, freq * 3, freq * 4]; const harmonicGains = [1.0, 0.6, 0.4, 0.2]; const maxGain = 0.3;
+            harmonicFreqs.forEach((hFreq, i) => { const osc = audioContext.createOscillator(); const gainNode = audioContext.createGain(); osc.frequency.setValueAtTime(hFreq, now); osc.type = 'sine'; gainNode.gain.setValueAtTime(0, now); gainNode.gain.linearRampToValueAtTime(harmonicGains[i] * maxGain, now + 0.02); gainNode.gain.linearRampToValueAtTime(0, now + duration); osc.connect(gainNode); gainNode.connect(audioContext.destination); osc.start(now); osc.stop(now + duration); });
+        }
+        
+        async function start() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const constraints = { audio: { autoGainControl: false, noiseSuppression: false, echoCancellation: false } };
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            const source = audioContext.createMediaStreamSource(stream);
+            const YIN_BUFFER_SIZE = 2048; const HOP_SIZE = 1024; const analysisBuffer = new Float32Array(YIN_BUFFER_SIZE);
+            const scriptNode = audioContext.createScriptProcessor(HOP_SIZE, 1, 1);
+            scriptNode.onaudioprocess = (audioProcessingEvent) => {
+                const newData = audioProcessingEvent.inputBuffer.getChannelData(0); analysisBuffer.copyWithin(0, HOP_SIZE); analysisBuffer.set(newData, HOP_SIZE);
+                const volume = getRMS(newData); const result = yin(analysisBuffer, { sampleRate: audioContext.sampleRate }); let pitch = null;
+                if (volume > 0.01 && result.probability > 0.90) { pitch = result.pitch; }
+                history.shift();
+                if (pitch && pitch > 70 && pitch < 1000) { history.push(pitch); } else { history.push(null); }
+            };
+            source.connect(scriptNode); scriptNode.connect(audioContext.destination);
+            function drawingLoop() { draw(); requestAnimationFrame(drawingLoop); }
+            drawingLoop();
+        }
+        
+        // --- EVENT LISTENERS FOR ALL DEVICES ---
+        // 1. Keyboard for Desktop
+        window.addEventListener('keydown', (e) => { if (e.key === 'ArrowUp' && targeti + 1 < names.length) { targeti++; } else if (e.key === 'ArrowDown' && targeti > 0) { targeti--; } });
+        
+        // 2. Mouse Wheel for Desktop
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            if (e.deltaY > 0 && targeti + 1 < names.length) { targeti++; } 
+            else if (e.deltaY < 0 && targeti > 0) { targeti--; }
+        });
+
+        // 3. Touch Swipe for Mobile
+        let touchStartY = 0;
+        const swipeThreshold = canvas.height / 40; // User must swipe this distance to change note
+        
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            touchStartY = e.touches[0].clientY;
+            playTone(freqs[targeti]); // Play tone on initial tap
+        }, { passive: false });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const touchY = e.touches[0].clientY;
+            const deltaY = touchY - touchStartY;
+
+            if (deltaY > swipeThreshold) { // Swiped down
+                if (targeti + 1 < names.length) targeti++;
+                touchStartY = touchY; // Reset start position for the next swipe
+            } else if (deltaY < -swipeThreshold) { // Swiped up
+                if (targeti > 0) targeti--;
+                touchStartY = touchY; // Reset start position
+            }
+        }, { passive: false });
+
+        // 4. Mouse Click for Desktop (still useful)
+        canvas.addEventListener('mousedown', () => playTone(freqs[targeti]));
+        
+        draw();
+        start();
+    </script>
+</body>
+</html>
