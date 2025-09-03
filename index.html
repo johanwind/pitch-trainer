@@ -75,17 +75,14 @@
             ctx.fillRect(barX, barY + barHeight - filledHeight, barWidth, filledHeight);
             if (coverage > 0.9) { const score = Math.sqrt(rmse / count) * 100; thisBest[targeti] = Math.min(thisBest[targeti], score); if (score < best[targeti]) { best[targeti] = score; saveBestScores(); } ctx.fillStyle = 'white'; ctx.font = (canvas.height / 25) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(`RMSE: ${score.toFixed(1)}`, canvas.width / 2, canvas.height * 0.07); }
             
-            // --- 1. Calculate and display global scores with new rules ---
             let avgText = "---";
             let medText = "---";
-
-            // Average: Only show if NO scores are 999
             if (!best.some(score => score === 999)) {
                 const average = best.reduce((a, b) => a + b, 0) / best.length;
-                avgText = average.toFixed(1);
+                // --- 1. Changed to two decimal places ---
+                avgText = average.toFixed(2);
             }
             
-            // Median: Calculate with all scores, but display '---' if median is 999
             const sortedScores = [...best].sort((a, b) => a - b);
             const mid = Math.floor(sortedScores.length / 2);
             const median = sortedScores.length % 2 !== 0 ? sortedScores[mid] : (sortedScores[mid - 1] + sortedScores[mid]) / 2;
@@ -93,7 +90,6 @@
 
             ctx.fillStyle = 'white';
             ctx.font = (canvas.height / 40) + 'px sans-serif';
-            // --- 2. Center the global score text ---
             ctx.textAlign = 'center';
             ctx.fillText(`Avg Best: ${avgText} | Median Best: ${medText}`, canvas.width / 2, canvas.height * 0.98);
         }
