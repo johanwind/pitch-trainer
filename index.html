@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
         html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #333; }
-        canvas { display: block; background-color: black; touch-action: none; /* Prevents browser from handling touch events like scrolling */ }
+        canvas { display: block; background-color: black; touch-action: none; }
     </style>
 </head>
 <body>
@@ -37,12 +37,24 @@
         let audioContext = null;
 
         const noteNames = 'C C# D D# E F F# G G# A A# B'.split(' '); const names = [].concat(...['2', '3', '4'].map(octave => noteNames.map(note => note + octave)));
-        const freqs = names.map((_, i) => 2**((i - 9) / 12) * 110); const minFreq = freqs[0]; const maxFreq = freqs[freqs.length - 1]; const logFreqRange = Math.log(maxFreq / minFreq);
+        const freqs = names.map((_, i) => 2**((i - 9) / 12) * 110);
+        const semitonesHeadroom = 1.0; 
+        const visualMinFreq = 2**((0 - semitonesHeadroom - 9) / 12) * 110;
+        const visualMaxFreq = 2**(((names.length - 1) + semitonesHeadroom - 9) / 12) * 110;
+        const logFreqRange = Math.log(visualMaxFreq / visualMinFreq);
+        
         let targeti = names.indexOf('C3'); const HISTORY_SIZE = 60; let history = new Array(HISTORY_SIZE).fill(null);
         let best = new Array(names.length).fill(999); let thisBest = new Array(names.length).fill(999);
         try { const storedBest = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY)); if (storedBest && storedBest.length === names.length) { best = storedBest; } } catch (e) { console.error("Could not load best scores:", e); }
         function saveBestScores() { localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(best)); }
-        function freqToY(f) { const topPadding = 30; const bottomPadding = 30; const drawingHeight = canvas.height - topPadding - bottomPadding; if (f > maxFreq) return topPadding; if (f < minFreq) return canvas.height - bottomPadding; return drawingHeight * (Math.log(maxFreq / f) / logFreqRange) + topPadding; }
+        
+        function freqToY(f) {
+            const topPadding = 30; const bottomPadding = 30;
+            const drawingHeight = canvas.height - topPadding - bottomPadding;
+            if (f > visualMaxFreq) return topPadding;
+            if (f < visualMinFreq) return canvas.height - bottomPadding;
+            return drawingHeight * (Math.log(visualMaxFreq / f) / logFreqRange) + topPadding;
+        }
         function getRMS(data) { let sum = 0; for (let i = 0; i < data.length; i++) { sum += data[i] * data[i]; } return Math.sqrt(sum / data.length); }
         
         function draw() {
@@ -62,6 +74,28 @@
             ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barWidth, barHeight); const filledHeight = barHeight * coverage; ctx.fillStyle = '#00FF00';
             ctx.fillRect(barX, barY + barHeight - filledHeight, barWidth, filledHeight);
             if (coverage > 0.9) { const score = Math.sqrt(rmse / count) * 100; thisBest[targeti] = Math.min(thisBest[targeti], score); if (score < best[targeti]) { best[targeti] = score; saveBestScores(); } ctx.fillStyle = 'white'; ctx.font = (canvas.height / 25) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(`RMSE: ${score.toFixed(1)}`, canvas.width / 2, canvas.height * 0.07); }
+            
+            // --- 1. Calculate and display global scores with new rules ---
+            let avgText = "---";
+            let medText = "---";
+
+            // Average: Only show if NO scores are 999
+            if (!best.some(score => score === 999)) {
+                const average = best.reduce((a, b) => a + b, 0) / best.length;
+                avgText = average.toFixed(1);
+            }
+            
+            // Median: Calculate with all scores, but display '---' if median is 999
+            const sortedScores = [...best].sort((a, b) => a - b);
+            const mid = Math.floor(sortedScores.length / 2);
+            const median = sortedScores.length % 2 !== 0 ? sortedScores[mid] : (sortedScores[mid - 1] + sortedScores[mid]) / 2;
+            medText = median === 999 ? "---" : median.toFixed(1);
+
+            ctx.fillStyle = 'white';
+            ctx.font = (canvas.height / 40) + 'px sans-serif';
+            // --- 2. Center the global score text ---
+            ctx.textAlign = 'center';
+            ctx.fillText(`Avg Best: ${avgText} | Median Best: ${medText}`, canvas.width / 2, canvas.height * 0.98);
         }
         
         function playTone(freq) {
@@ -81,45 +115,33 @@
                 const newData = audioProcessingEvent.inputBuffer.getChannelData(0); analysisBuffer.copyWithin(0, HOP_SIZE); analysisBuffer.set(newData, HOP_SIZE);
                 const volume = getRMS(newData); const result = yin(analysisBuffer, { sampleRate: audioContext.sampleRate }); let pitch = null;
                 if (volume > 0.01 && result.probability > 0.90) { pitch = result.pitch; }
+                if (pitch && pitch > 60 && pitch < 1000) { history.push(pitch); } else { history.push(null); }
                 history.shift();
-                if (pitch && pitch > 70 && pitch < 1000) { history.push(pitch); } else { history.push(null); }
             };
             source.connect(scriptNode); scriptNode.connect(audioContext.destination);
             function drawingLoop() { draw(); requestAnimationFrame(drawingLoop); }
             drawingLoop();
         }
         
-        // --- EVENT LISTENERS FOR ALL DEVICES ---
-        window.addEventListener('keydown', (e) => { if (e.key === 'ArrowUp' && targeti + 1 < names.length) { targeti++; } else if (e.key === 'ArrowDown' && targeti > 0) { targeti--; } });
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp' && targeti + 1 < names.length) { targeti++; } 
+            else if (e.key === 'ArrowDown' && targeti > 0) { targeti--; }
+            else if (e.code === 'Space') { e.preventDefault(); playTone(freqs[targeti]); }
+        });
         
+        let wheelAccumulator = 0; const wheelThreshold = 50;
         canvas.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            if (e.deltaY < 0 && targeti + 1 < names.length) { targeti++; } 
-            else if (e.deltaY > 0 && targeti > 0) { targeti--; }
+            e.preventDefault(); wheelAccumulator += e.deltaY;
+            if (wheelAccumulator < -wheelThreshold) { if (targeti + 1 < names.length) targeti++; wheelAccumulator = 0; } 
+            else if (wheelAccumulator > wheelThreshold) { if (targeti > 0) targeti--; wheelAccumulator = 0; }
         });
 
-        let touchStartY = 0;
-        const swipeThreshold = canvas.height / 40;
-        
-        canvas.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            touchStartY = e.touches[0].clientY;
-            playTone(freqs[targeti]);
-        }, { passive: false });
-
+        let touchStartY = 0; const swipeThreshold = canvas.height / 25;
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); touchStartY = e.touches[0].clientY; playTone(freqs[targeti]); }, { passive: false });
         canvas.addEventListener('touchmove', (e) => {
-            e.preventDefault();
-            const touchY = e.touches[0].clientY;
-            const deltaY = touchY - touchStartY;
-
-            // **** CRITICAL CHANGE: SWIPE LOGIC IS INVERTED ****
-            if (deltaY > swipeThreshold) { // Swiped down
-                if (targeti > 0) targeti--; // DECREASE index (move to a lower note)
-                touchStartY = touchY; 
-            } else if (deltaY < -swipeThreshold) { // Swiped up
-                if (targeti + 1 < names.length) targeti++; // INCREASE index (move to a higher note)
-                touchStartY = touchY;
-            }
+            e.preventDefault(); const touchY = e.touches[0].clientY; const deltaY = touchY - touchStartY;
+            if (deltaY > swipeThreshold) { if (targeti > 0) targeti--; touchStartY = touchY; } 
+            else if (deltaY < -swipeThreshold) { if (targeti + 1 < names.length) targeti++; touchStartY = touchY; }
         }, { passive: false });
 
         canvas.addEventListener('mousedown', () => playTone(freqs[targeti]));
